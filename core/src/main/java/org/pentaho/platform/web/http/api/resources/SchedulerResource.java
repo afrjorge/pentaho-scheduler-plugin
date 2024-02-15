@@ -607,6 +607,17 @@ public class SchedulerResource implements ISchedulerResource {
     return schedulerService.doGetCanSchedule();
   }
 
+  @GET
+  @Path( "/canExecuteSchedules" )
+  @Produces( APPLICATION_JSON )
+  @StatusCodes( {
+      @ResponseCode( code = 200, condition = "Successful retrieved the scheduling permission." ),
+      @ResponseCode( code = 500, condition = "Unable to retrieve the scheduling permission." )
+  } )
+  public String doGetCanExecuteSchedules() {
+    return "true";
+  }
+
   /**
    * Returns the state of the scheduler with the value of RUNNING or PAUSED.
    *

@@ -206,8 +206,8 @@ public class SchedulesPanel extends SimplePanel {
     }
   };
 
-  public SchedulesPanel( final boolean isAdmin, final boolean isScheduler ) {
-    createUI( isAdmin, isScheduler );
+  public SchedulesPanel( final boolean isAdmin, final boolean isScheduler, final boolean canExecuteSchedules ) {
+    createUI( isAdmin, isScheduler, canExecuteSchedules );
     refresh();
   }
 
@@ -339,7 +339,7 @@ public class SchedulesPanel extends SimplePanel {
     }
   }
 
-  private void createUI( boolean isAdmin, final boolean isScheduler ) {
+  private void createUI( boolean isAdmin, final boolean isScheduler, final boolean canExecuteSchedules ) {
 
     table.getElement().setId( "schedule-table" );
     table.setStylePrimaryName( "pentaho-table" );
@@ -525,7 +525,7 @@ public class SchedulesPanel extends SimplePanel {
 
     table.addColumn( lastFireColumn, Messages.getString( "lastFire" ) );
     table.addColumn( nextFireColumn, Messages.getString( "nextFire" ) );
-    if ( isAdmin ) {
+    if ( isAdmin || canExecuteSchedules ) {
       table.addColumn( userNameColumn, Messages.getString( "user" ) );
     }
     table.addColumn( stateColumn, Messages.getString( "state" ) );
@@ -537,7 +537,7 @@ public class SchedulesPanel extends SimplePanel {
     table.addColumnStyleName( 4, "backgroundContentHeaderTableCell" );
     table.addColumnStyleName( 5, "backgroundContentHeaderTableCell" );
     table.addColumnStyleName( 6, "backgroundContentHeaderTableCell" );
-    if ( isAdmin ) {
+    if ( isAdmin || canExecuteSchedules ) {
       table.addColumnStyleName( 7, "backgroundContentHeaderTableCell" );
     }
     table.addColumnStyleName( isAdmin ? 8 : 7, "backgroundContentHeaderTableCell" );
@@ -549,7 +549,7 @@ public class SchedulesPanel extends SimplePanel {
     table.setColumnWidth( lastFireColumn, 120, Unit.PX );
     table.setColumnWidth( nextFireColumn, 120, Unit.PX );
     table.setColumnWidth( type, 120, Unit.PX );
-    if ( isAdmin ) {
+    if ( isAdmin || canExecuteSchedules ) {
       table.setColumnWidth( userNameColumn, 100, Unit.PX );
     }
     table.setColumnWidth( stateColumn, 90, Unit.PX );
@@ -707,9 +707,9 @@ public class SchedulesPanel extends SimplePanel {
 
           controlScheduleButton.setEnabled( isScheduler );
           editButton.setEnabled( isScheduler );
-          controlScheduleButton.setEnabled( isScheduler );
+          controlScheduleButton.setEnabled( isScheduler || canExecuteSchedules );
           scheduleRemoveButton.setEnabled( isScheduler );
-          triggerNowButton.setEnabled( isScheduler );
+          triggerNowButton.setEnabled( isScheduler || canExecuteSchedules );
         } else {
           editButton.setEnabled( false );
           controlScheduleButton.setEnabled( false );
@@ -823,7 +823,7 @@ public class SchedulesPanel extends SimplePanel {
     } );
 
     filterButton.setToolTip( Messages.getString( "filterSchedules" ) );
-    if ( isAdmin ) {
+    if ( isAdmin || canExecuteSchedules ) {
       bar.add( filterButton );
     }
 
@@ -839,7 +839,7 @@ public class SchedulesPanel extends SimplePanel {
     } );
     filterRemoveButton.setToolTip( Messages.getString( "removeFilters" ) );
     filterRemoveButton.setEnabled( !filters.isEmpty() );
-    if ( isAdmin ) {
+    if ( isAdmin || canExecuteSchedules ) {
       bar.add( filterRemoveButton );
     }
 

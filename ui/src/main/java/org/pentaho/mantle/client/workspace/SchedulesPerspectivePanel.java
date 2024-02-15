@@ -46,6 +46,7 @@ public class SchedulesPerspectivePanel extends SimplePanel {
 
   private boolean isScheduler;
   private boolean isAdmin;
+  private boolean canExecuteSchedules;
 
   public static SchedulesPerspectivePanel getInstance() {
     return instance;
@@ -62,6 +63,7 @@ public class SchedulesPerspectivePanel extends SimplePanel {
         public void onError( Request request, Throwable caught ) {
           isAdmin = false;
           isScheduler = false;
+          canExecuteSchedules = false;
         }
 
         public void onResponseReceived( Request request, Response response ) {
@@ -76,13 +78,57 @@ public class SchedulesPerspectivePanel extends SimplePanel {
 
               public void onError( Request request, Throwable caught ) {
                 isScheduler = false;
-                createUI();
+
+                try {
+                  final String url2 = ScheduleHelper.getPluginContextURL() + "api/scheduler/canExecuteSchedules"; //$NON-NLS-1$
+                  RequestBuilder requestBuilder2 = new RequestBuilder( RequestBuilder.GET, url2 );
+                  requestBuilder2.setHeader( "accept", "application/json" ); //$NON-NLS-1$ //$NON-NLS-2$
+                  requestBuilder2.setHeader( "If-Modified-Since", "01 Jan 1970 00:00:00 GMT" );
+                  requestBuilder2.sendRequest( null, new RequestCallback() {
+
+                    public void onError( Request request, Throwable caught ) {
+                      canExecuteSchedules = false;
+                      createUI();
+
+                    }
+
+                    public void onResponseReceived( Request request, Response response ) {
+                      canExecuteSchedules = "true".equalsIgnoreCase( response.getText() ); //$NON-NLS-1$
+                      createUI();
+                    }
+
+                  } );
+                } catch ( RequestException e ) {
+                  Window.alert( e.getMessage() );
+                }
 
               }
 
               public void onResponseReceived( Request request, Response response ) {
                 isScheduler = "true".equalsIgnoreCase( response.getText() ); //$NON-NLS-1$
-                createUI();
+
+                try {
+                  final String url2 = ScheduleHelper.getPluginContextURL() + "api/scheduler/canExecuteSchedules"; //$NON-NLS-1$
+                  RequestBuilder requestBuilder2 = new RequestBuilder( RequestBuilder.GET, url2 );
+                  requestBuilder2.setHeader( "accept", "application/json" ); //$NON-NLS-1$ //$NON-NLS-2$
+                  requestBuilder2.setHeader( "If-Modified-Since", "01 Jan 1970 00:00:00 GMT" );
+                  requestBuilder2.sendRequest( null, new RequestCallback() {
+
+                    public void onError( Request request, Throwable caught ) {
+                      canExecuteSchedules = false;
+                      createUI();
+
+                    }
+
+                    public void onResponseReceived( Request request, Response response ) {
+                      canExecuteSchedules = "true".equalsIgnoreCase( response.getText() ); //$NON-NLS-1$
+                      createUI();
+                    }
+
+                  } );
+                } catch ( RequestException e ) {
+                  Window.alert( e.getMessage() );
+                }
               }
 
             } );
@@ -112,7 +158,7 @@ public class SchedulesPerspectivePanel extends SimplePanel {
     schedulesLabel.setStyleName( "workspaceHeading" ); //$NON-NLS-1$
     wrapperPanel.add( schedulesLabel );
 
-    schedulesPanel = new SchedulesPanel( isAdmin, isScheduler );
+    schedulesPanel = new SchedulesPanel( isAdmin, isScheduler, canExecuteSchedules );
     schedulesPanel.setStyleName( "schedulesPanel" ); //$NON-NLS-1$
     schedulesPanel.addStyleName( "schedules-panel-wrapper" ); //$NON-NLS-1$
     wrapperPanel.add( schedulesPanel );
