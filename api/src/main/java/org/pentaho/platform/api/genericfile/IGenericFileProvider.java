@@ -158,4 +158,9 @@ public interface IGenericFileProvider<T extends IGenericFile> {
    * @throws OperationFailedException If the operation fails for some (checked) reason.
    */
   IGenericFileContentWrapper getFileContentWrapper(@NonNull GenericFilePath path ) throws OperationFailedException;
+
+  /**
+   * TODO
+   */
+  IGenericFile getFile( @NonNull GenericFilePath path ) throws OperationFailedException;
 }

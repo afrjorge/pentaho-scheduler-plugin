@@ -29,6 +29,7 @@ import org.pentaho.platform.api.genericfile.exception.AccessControlException;
 import org.pentaho.platform.api.genericfile.exception.InvalidPathException;
 import org.pentaho.platform.api.genericfile.exception.NotFoundException;
 import org.pentaho.platform.api.genericfile.exception.OperationFailedException;
+import org.pentaho.platform.api.genericfile.model.IGenericFile;
 import org.pentaho.platform.api.genericfile.model.IGenericFileContentWrapper;
 import org.pentaho.platform.api.repository2.unified.IUnifiedRepository;
 import org.pentaho.platform.api.repository2.unified.RepositoryFilePermission;
@@ -51,6 +52,7 @@ import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 
@@ -185,6 +187,36 @@ public class RepositoryFileProvider extends BaseGenericFileProvider<RepositoryFi
     } catch ( FileNotFoundException e ) {
       throw new OperationFailedException( e );
     }
+  }
+
+  @Override
+  public IGenericFile getFile( @NonNull GenericFilePath path )
+    throws OperationFailedException {
+    org.pentaho.platform.api.repository2.unified.RepositoryFile repositoryFile =
+      unifiedRepository.getFile( path.toString() );
+
+    if ( repositoryFile == null ) {
+      throw new OperationFailedException( String.format( "Repository file not found '%s'.", path ) );
+    }
+
+    final RepositoryFile file = new RepositoryFile();
+
+    file.setName( repositoryFile.getName() );
+    file.setTitle( repositoryFile.getTitle() );
+    file.setPath( repositoryFile.getPath() );
+    file.setType( IGenericFile.TYPE_FILE );
+    file.setDescription( repositoryFile.getDescription() );
+    file.setModifiedDate( repositoryFile.getLastModifiedDate() );
+
+    if ( hasAccess( path, EnumSet.copyOf( List.of( GenericFilePermission.WRITE ) ) ) ) {
+      file.setCanEdit( true );
+    }
+
+    if ( hasAccess( path, EnumSet.copyOf( List.of( GenericFilePermission.DELETE ) ) ) ) {
+      file.setCanDelete( true );
+    }
+
+    return file;
   }
 
   /**

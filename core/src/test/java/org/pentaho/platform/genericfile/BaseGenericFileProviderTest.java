@@ -72,6 +72,11 @@ public class BaseGenericFileProviderTest {
       throw new UnsupportedOperationException();
     }
 
+    @Override
+    public IGenericFile getFile( @NonNull GenericFilePath path ) {
+      throw new UnsupportedOperationException();
+    }
+
     @NonNull
     @Override
     public Class<T> getFileClass() {

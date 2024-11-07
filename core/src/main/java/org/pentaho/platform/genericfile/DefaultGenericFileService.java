@@ -160,6 +160,12 @@ public class DefaultGenericFileService implements IGenericFileService {
     return getOwnerFileProvider( path ).orElseThrow( NotFoundException::new ).getFileContentWrapper( path );
   }
 
+  @Override
+  public IGenericFile getFile( @NonNull GenericFilePath path )
+    throws OperationFailedException {
+    return getOwnerFileProvider( path ).orElseThrow( NotFoundException::new ).getFile( path );
+  }
+
   private Optional<IGenericFileProvider<?>> getOwnerFileProvider( @NonNull GenericFilePath path ) {
     return fileProviders.stream()
       .filter( fileProvider -> fileProvider.owns( path ) )
