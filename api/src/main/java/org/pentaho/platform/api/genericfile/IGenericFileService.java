@@ -24,6 +24,7 @@ import org.pentaho.platform.api.genericfile.exception.NotFoundException;
 import org.pentaho.platform.api.genericfile.exception.InvalidPathException;
 import org.pentaho.platform.api.genericfile.exception.InvalidOperationException;
 import org.pentaho.platform.api.genericfile.exception.OperationFailedException;
+import org.pentaho.platform.api.genericfile.model.IGenericFile;
 import org.pentaho.platform.api.genericfile.model.IGenericFileTree;
 
 import java.util.EnumSet;
@@ -182,4 +183,9 @@ public interface IGenericFileService {
    * @throws OperationFailedException If the operation fails for some other (checked) reason.
    */
   IGenericFileContentWrapper getFileContentWrapper(@NonNull GenericFilePath path) throws OperationFailedException;
+
+  /**
+   * TODO
+   */
+  IGenericFile getFile( @NonNull GenericFilePath path ) throws OperationFailedException;
 }
