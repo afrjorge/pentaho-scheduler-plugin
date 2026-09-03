@@ -42,6 +42,23 @@
             <version>${pentaho-generic-file-system.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+        Not consumed on the classpath. Declared solely so that the reactor
+        creates a dependency edge on pentaho-scheduler-ui and orders it before
+        this module. The assembly descriptor pulls the compiled GWT output of
+        that module into resources/gwt through a <moduleSet> with
+        useAllReactorProjects, which is invisible to the reactor. Without this
+        edge, parallel builds (-T) can package the assembly while the GWT
+        compile is still running, silently producing a zip with an empty or
+        missing resources/gwt. See src/assembly/assembly.xml.
+        -->
+        <dependency>
+            <groupId>pentaho</groupId>
+            <artifactId>pentaho-scheduler-ui</artifactId>
+            <version>${pentaho-scheduler-plugin.version}</version>
+            <type>war</type>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>
