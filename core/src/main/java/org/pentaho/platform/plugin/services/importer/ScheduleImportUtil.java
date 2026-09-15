@@ -39,6 +39,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Imports schedule definitions from the active platform import session.
+ * <p>
+ * The scheduler is paused while schedules are inspected, replaced, and created. Once paused, a restart is attempted
+ * regardless of whether the import completes successfully. A restart failure is propagated unless another import
+ * failure is already in flight, in which case it is attached to the original failure as a suppressed exception.
+ */
 public class ScheduleImportUtil implements IImportHelper {
   private static final String RESERVEDMAPKEY_LINEAGE_ID = "lineage-id";
   private static final String SCHEDULE_IMPORT_UTIL_NAME ="schedule-import-util";
@@ -51,6 +58,16 @@ public class ScheduleImportUtil implements IImportHelper {
     PentahoSystem.get( SolutionImportHandler.class, "solutionImportHandler", null ).addImportHelper( this );
   }
 
+  /**
+   * Imports all schedules from the active import manifest.
+   * <p>
+   * Individual schedule-creation failures are logged with their causes and do not stop the remaining schedules.
+   * Failures outside that per-schedule creation boundary are propagated after an attempt to restart the scheduler; a
+   * restart failure is then attached to them as a suppressed exception rather than replacing them.
+   *
+   * @param solutionImportHandler the import context supplying overwrite behavior and logging
+   * @throws ImportException if the import framework reports a checked import failure
+   */
   @Override
   public void doImport( IImportHelper.ImportContext solutionImportHandler ) throws ImportException {
     List<IJobScheduleRequest> scheduleList = getScheduleList();
@@ -71,126 +88,193 @@ public class ScheduleImportUtil implements IImportHelper {
       if ( solutionImportHandler.isPerformingRestore() ) {
         solutionImportHandler.getLogger().debug( "Successfully paused the scheduler" );
       }
-      for ( IJobScheduleRequest jobScheduleRequest : scheduleList ) {
-        if ( solutionImportHandler.isPerformingRestore() ) {
-          solutionImportHandler.getLogger().debug( "Restoring schedule name [ " + jobScheduleRequest.getJobName() + "] inputFile [ " + jobScheduleRequest.getInputFile() + " ] outputFile [ " + jobScheduleRequest.getOutputFile() + "]" );
-        }
-        boolean jobExists = false;
-
-        List<IJob> jobs = schedulerResource.getJobsList();
-        if ( jobs != null ) {
-
-          //paramRequest to map<String, Serializable>
-          Map<String, Serializable> mapParamsRequest = new HashMap<>();
-          for ( IJobScheduleParam paramRequest : jobScheduleRequest.getJobParameters() ) {
-            mapParamsRequest.put( paramRequest.getName(), paramRequest.getValue() );
+      Throwable importFailure = null;
+      try {
+        for ( IJobScheduleRequest jobScheduleRequest : scheduleList ) {
+          if ( solutionImportHandler.isPerformingRestore() ) {
+            solutionImportHandler.getLogger().debug( "Restoring schedule name [ " + jobScheduleRequest.getJobName() + "] inputFile [ " + jobScheduleRequest.getInputFile() + " ] outputFile [ " + jobScheduleRequest.getOutputFile() + "]" );
           }
+          boolean jobExists = false;
 
-          // We will check the existing job in the repository. If the job being imported exists, we will remove it from the repository
-          for ( IJob job : jobs ) {
+          List<IJob> jobs = schedulerResource.getJobsList();
+          if ( jobs != null ) {
 
-            if ( ( mapParamsRequest.get( RESERVEDMAPKEY_LINEAGE_ID ) != null )
-              && ( mapParamsRequest.get( RESERVEDMAPKEY_LINEAGE_ID )
-              .equals( job.getJobParams().get( RESERVEDMAPKEY_LINEAGE_ID ) ) ) ) {
-              jobExists = true;
+            //paramRequest to map<String, Serializable>
+            Map<String, Serializable> mapParamsRequest = new HashMap<>();
+            for ( IJobScheduleParam paramRequest : jobScheduleRequest.getJobParameters() ) {
+              mapParamsRequest.put( paramRequest.getName(), paramRequest.getValue() );
             }
 
-            if ( solutionImportHandler.isOverwriteFile() && jobExists ) {
-              if ( solutionImportHandler.isPerformingRestore() ) {
-                solutionImportHandler.getLogger().debug( "Schedule  [ " + jobScheduleRequest.getJobName() + "] already exists and overwrite flag is set to true. Removing the job so we can add it again" );
+            // We will check the existing job in the repository. If the job being imported exists, we will remove it from the repository
+            for ( IJob job : jobs ) {
+
+              if ( ( mapParamsRequest.get( RESERVEDMAPKEY_LINEAGE_ID ) != null )
+                && ( mapParamsRequest.get( RESERVEDMAPKEY_LINEAGE_ID )
+                .equals( job.getJobParams().get( RESERVEDMAPKEY_LINEAGE_ID ) ) ) ) {
+                jobExists = true;
               }
-              IJobRequest jobRequest = scheduler.createJobRequest();
-              jobRequest.setJobId( job.getJobId() );
-              schedulerResource.removeJob( jobRequest );
-              jobExists = false;
-              break;
-            }
-          }
-        }
 
-        boolean canImport = convertFromPreTimeZoneTrigger( jobScheduleRequest, solutionImportHandler );
-        if ( !canImport ) {
-          continue;
-        }
-
-        if ( !jobExists ) {
-          try {
-            Response response = createSchedulerJob( schedulerResource, jobScheduleRequest );
-            if ( response.getStatus() == Response.Status.OK.getStatusCode() ) {
-              if ( response.getEntity() != null ) {
-                // get the schedule job id from the response and add it to the import session
-                ImportSession.getSession().addImportedScheduleJobId( response.getEntity().toString() );
+              if ( solutionImportHandler.isOverwriteFile() && jobExists ) {
                 if ( solutionImportHandler.isPerformingRestore() ) {
-                  solutionImportHandler.getLogger().debug( "Successfully restored schedule [ " + jobScheduleRequest.getJobName() + " ] " );
+                  solutionImportHandler.getLogger().debug( "Schedule  [ " + jobScheduleRequest.getJobName() + "] already exists and overwrite flag is set to true. Removing the job so we can add it again" );
                 }
-                successfulScheduleImportCount++;
+                IJobRequest jobRequest = scheduler.createJobRequest();
+                jobRequest.setJobId( job.getJobId() );
+                schedulerResource.removeJob( jobRequest );
+                jobExists = false;
+                break;
               }
-            } else {
-              solutionImportHandler.getLogger().error( Messages.getInstance().getString( "SolutionImportHandler.ERROR_IMPORTING_SCHEDULE", jobScheduleRequest.getJobName(), response.getEntity() != null
-                ? response.getEntity().toString() : "" ) );
             }
-          } catch ( Exception e ) {
-            // there is a scenario where if the file scheduled has a space in the file name, that it won't work. the
-            // di server
+          }
 
-            // replaces spaces with underscores and the export mechanism can't determine if it needs this to happen
-            // or not
-            // so, if we failed to import and there is a space in the path, try again but this time with replacing
-            // the space(s)
-            if ( jobScheduleRequest.getInputFile().contains( " " ) || jobScheduleRequest.getOutputFile()
-              .contains( " " ) ) {
-              solutionImportHandler.getLogger().debug( Messages.getInstance()
-                .getString( "SolutionImportHandler.SchedulesWithSpaces", jobScheduleRequest.getInputFile() ) );
-              File inFile = new File( jobScheduleRequest.getInputFile() );
-              File outFile = new File( jobScheduleRequest.getOutputFile() );
-              String inputFileName = inFile.getParent() + RepositoryFile.SEPARATOR
-                + inFile.getName().replace( " ", "_" );
-              String outputFileName = outFile.getParent() + RepositoryFile.SEPARATOR
-                + outFile.getName().replace( " ", "_" );
-              jobScheduleRequest.setInputFile( inputFileName );
-              jobScheduleRequest.setOutputFile( outputFileName );
-              try {
-                if ( !File.separator.equals( RepositoryFile.SEPARATOR ) ) {
-                  // on windows systems, the backslashes will result in the file not being found in the repository
-                  jobScheduleRequest.setInputFile( inputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
-                  jobScheduleRequest
-                    .setOutputFile( outputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
-                }
-                Response response = createSchedulerJob( schedulerResource, jobScheduleRequest );
-                if ( response.getStatus() == Response.Status.OK.getStatusCode() ) {
-                  if ( response.getEntity() != null ) {
-                    // get the schedule job id from the response and add it to the import session
-                    ImportSession.getSession().addImportedScheduleJobId( response.getEntity().toString() );
-                    successfulScheduleImportCount++;
+          boolean canImport = convertFromPreTimeZoneTrigger( jobScheduleRequest, solutionImportHandler );
+          if ( !canImport ) {
+            continue;
+          }
+
+          if ( !jobExists ) {
+            try {
+              Response response = createSchedulerJob( schedulerResource, jobScheduleRequest );
+              if ( response.getStatus() == Response.Status.OK.getStatusCode() ) {
+                if ( response.getEntity() != null ) {
+                  // get the schedule job id from the response and add it to the import session
+                  ImportSession.getSession().addImportedScheduleJobId( response.getEntity().toString() );
+                  if ( solutionImportHandler.isPerformingRestore() ) {
+                    solutionImportHandler.getLogger().debug( "Successfully restored schedule [ " + jobScheduleRequest.getJobName() + " ] " );
                   }
+                  successfulScheduleImportCount++;
                 }
-              } catch ( Exception ex ) {
+              } else {
+                solutionImportHandler.getLogger().error( Messages.getInstance().getString( "SolutionImportHandler.ERROR_IMPORTING_SCHEDULE", jobScheduleRequest.getJobName(), response.getEntity() != null
+                  ? response.getEntity().toString() : "" ) );
+              }
+            } catch ( Exception e ) {
+              // there is a scenario where if the file scheduled has a space in the file name, that it won't work. the
+              // di server
+
+              // replaces spaces with underscores and the export mechanism can't determine if it needs this to happen
+              // or not
+              // so, if we failed to import and there is a space in the path, try again but this time with replacing
+              // the space(s)
+              if ( jobScheduleRequest.getInputFile().contains( " " ) || jobScheduleRequest.getOutputFile()
+                .contains( " " ) ) {
+                solutionImportHandler.getLogger().debug( Messages.getInstance()
+                  .getString( "SolutionImportHandler.SchedulesWithSpaces", jobScheduleRequest.getInputFile() ) );
+                File inFile = new File( jobScheduleRequest.getInputFile() );
+                File outFile = new File( jobScheduleRequest.getOutputFile() );
+                String inputFileName = inFile.getParent() + RepositoryFile.SEPARATOR
+                  + inFile.getName().replace( " ", "_" );
+                String outputFileName = outFile.getParent() + RepositoryFile.SEPARATOR
+                  + outFile.getName().replace( " ", "_" );
+                jobScheduleRequest.setInputFile( inputFileName );
+                jobScheduleRequest.setOutputFile( outputFileName );
+                try {
+                  if ( !File.separator.equals( RepositoryFile.SEPARATOR ) ) {
+                    // on windows systems, the backslashes will result in the file not being found in the repository
+                    jobScheduleRequest.setInputFile( inputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
+                    jobScheduleRequest
+                      .setOutputFile( outputFileName.replace( File.separator, RepositoryFile.SEPARATOR ) );
+                  }
+                  Response response = createSchedulerJob( schedulerResource, jobScheduleRequest );
+                  if ( response.getStatus() == Response.Status.OK.getStatusCode() ) {
+                    if ( response.getEntity() != null ) {
+                      // get the schedule job id from the response and add it to the import session
+                      ImportSession.getSession().addImportedScheduleJobId( response.getEntity().toString() );
+                      successfulScheduleImportCount++;
+                    }
+                  }
+                } catch ( Exception ex ) {
+                  // log it and keep going. we shouldn't stop processing all schedules just because one fails.
+                  solutionImportHandler.getLogger().error( Messages.getInstance()
+                    .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ] cause [ " + ex.getMessage() + " ]" ), ex );
+                }
+              } else {
                 // log it and keep going. we shouldn't stop processing all schedules just because one fails.
                 solutionImportHandler.getLogger().error( Messages.getInstance()
-                  .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ] cause [ " + ex.getMessage() + " ]" ), ex );
+                  .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ] cause [ " + e + " ]" ), e );
               }
-            } else {
-              // log it and keep going. we shouldn't stop processing all schedules just because one fails.
-              solutionImportHandler.getLogger().error( Messages.getInstance()
-                .getString( "SolutionImportHandler.ERROR_0001_ERROR_CREATING_SCHEDULE", "[ " + jobScheduleRequest.getJobName() + " ]" ) );
             }
+          } else {
+            solutionImportHandler.getLogger().info( Messages.getInstance()
+              .getString( "DefaultImportHandler.ERROR_0009_OVERWRITE_CONTENT", jobScheduleRequest.toString() ) );
           }
-        } else {
-          solutionImportHandler.getLogger().info( Messages.getInstance()
-            .getString( "DefaultImportHandler.ERROR_0009_OVERWRITE_CONTENT", jobScheduleRequest.toString() ) );
         }
-      }
-      if ( solutionImportHandler.isPerformingRestore() ) {
-        solutionImportHandler.getLogger().info( Messages.getInstance()
-          .getString( "SolutionImportHandler.INFO_SUCCESSFUL_SCHEDULE_IMPORT_COUNT", successfulScheduleImportCount, scheduleList.size() ) );
-      }
-      schedulerResource.start();
-      if ( solutionImportHandler.isPerformingRestore() ) {
-        solutionImportHandler.getLogger().debug( "Successfully started the scheduler" );
+        if ( solutionImportHandler.isPerformingRestore() ) {
+          solutionImportHandler.getLogger().info( Messages.getInstance()
+            .getString( "SolutionImportHandler.INFO_SUCCESSFUL_SCHEDULE_IMPORT_COUNT", successfulScheduleImportCount, scheduleList.size() ) );
+        }
+      } catch ( Throwable t ) {
+        // Recorded so that the finally block can attach a restart failure instead of masking this one. Throwable is
+        // required because a checked ImportException or an Error must not be discarded either.
+        importFailure = t;
+        throw t;
+      } finally {
+        boolean schedulerRestarted = false;
+        try {
+          // Only the restart itself is guarded. Reporting it must not be able to masquerade as a restart failure.
+          schedulerResource.start();
+          schedulerRestarted = true;
+        } catch ( Throwable restartFailure ) {
+          // Mirrors the guard above: an Error raised while restarting must not replace the in-flight import failure.
+          // The suppression decision is taken before logging, because the import logger can itself fail in exactly
+          // these sequences and must not be able to throw out of this block and mask importFailure.
+          if ( importFailure != null ) {
+            importFailure.addSuppressed( restartFailure );
+          }
+          logRestartFailure( solutionImportHandler, restartFailure );
+          if ( importFailure == null ) {
+            throw restartFailure;
+          }
+        }
+        if ( schedulerRestarted ) {
+          logSchedulerRestarted( solutionImportHandler );
+        }
       }
     }
     if ( solutionImportHandler.isPerformingRestore() ) {
       solutionImportHandler.getLogger().info( Messages.getInstance().getString( "SolutionImportHandler.INFO_END_IMPORT_SCHEDULE" ) );
+    }
+  }
+
+  /**
+   * Logs a scheduler restart failure without ever throwing.
+   * <p>
+   * This is called from a {@code finally} block while another failure may already be propagating. The import logger
+   * writes to the restore log, which can itself be unusable in precisely those failure sequences, so a logging failure
+   * is attached to the restart failure rather than allowed to escape and mask the original one.
+   *
+   * @param solutionImportHandler the import context supplying the logger
+   * @param restartFailure the scheduler restart failure to report
+   */
+  private void logRestartFailure( IImportHelper.ImportContext solutionImportHandler, Throwable restartFailure ) {
+    try {
+      solutionImportHandler.getLogger().error(
+        Messages.getInstance().getString( "SolutionImportHandler.ERROR_0002_SCHEDULER_RESTART_FAILED" ),
+        restartFailure );
+    } catch ( Throwable loggingFailure ) {
+      if ( loggingFailure != restartFailure ) {
+        restartFailure.addSuppressed( loggingFailure );
+      }
+    }
+  }
+
+  /**
+   * Reports a successful scheduler restart without ever throwing.
+   * <p>
+   * This runs in a {@code finally} block, after the restart guard, while another failure may still be propagating. A
+   * failure of the import logger must therefore neither mask that failure nor turn a completed restore into a failed
+   * one, so it is deliberately swallowed: the logger is the very thing that failed, leaving nowhere to report it.
+   *
+   * @param solutionImportHandler the import context supplying the logger
+   */
+  private void logSchedulerRestarted( IImportHelper.ImportContext solutionImportHandler ) {
+    if ( !solutionImportHandler.isPerformingRestore() ) {
+      return;
+    }
+    try {
+      solutionImportHandler.getLogger().debug( "Successfully started the scheduler" );
+    } catch ( Throwable loggingFailure ) {
+      // Intentionally ignored - see the method javadoc.
     }
   }
 

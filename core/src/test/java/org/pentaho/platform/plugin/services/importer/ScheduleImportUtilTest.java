@@ -34,6 +34,7 @@ import org.pentaho.platform.api.scheduler2.JobState;
 import org.pentaho.platform.api.scheduler2.SimpleJobTrigger;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.plugin.services.importexport.ImportSession;
+import org.pentaho.platform.plugin.services.messages.Messages;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -52,6 +53,18 @@ public class ScheduleImportUtilTest {
   private ISchedulerResource mockSchedulerResource;
   private IJobRequest mockJobRequest;
   private Log mockLogger;
+
+  /**
+   * Resolved once from the bundle so that rewording the message cannot break the test for a non-functional reason.
+   * <p>
+   * The key lives in the {@code pentaho-platform} message bundle that backs {@code SolutionImportHandler.*}, not in
+   * this repository, so {@link #restartFailedMessageResolves()} pins the resolution: {@code MessageUtil} degrades a
+   * missing key to {@code !key!} instead of throwing, which would otherwise leave the restart-failure line
+   * unreadable in the restore log while every assertion below still passed.
+   */
+  private static final String RESTART_FAILED_KEY = "SolutionImportHandler.ERROR_0002_SCHEDULER_RESTART_FAILED";
+  private static final String EXPECTED_RESTART_FAILED_MESSAGE =
+    Messages.getInstance().getString( RESTART_FAILED_KEY );
 
   @Before
   public void setUp() {
@@ -215,6 +228,175 @@ public class ScheduleImportUtilTest {
   }
 
   @Test
+  public void testDoImport_restartsSchedulerWhenImportFails() throws Exception {
+    FakeJobScheduleRequest scheduleRequest = new FakeJobScheduleRequest();
+    scheduleRequest.setInputFile( "/home/admin/test.prpt" );
+    scheduleRequest.setOutputFile( "/home/admin/test.*" );
+    scheduleRequest.setJobName( "TestJob" );
+    RuntimeException importFailure = new RuntimeException( "session expired" );
+    when( mockSchedulerResource.getJobsList() ).thenThrow( importFailure );
+
+    TestableScheduleImportUtil scheduleImportUtil =
+      new TestableScheduleImportUtil( Collections.singletonList( scheduleRequest ) );
+
+    try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
+      stubPentahoSystem( pentahoSystemMock );
+
+      try {
+        scheduleImportUtil.doImport( createImportContext( true, false ) );
+        Assert.fail( "The import failure was expected" );
+      } catch ( RuntimeException expected ) {
+        Assert.assertSame( importFailure, expected );
+      }
+
+      verify( mockSchedulerResource ).pause();
+      verify( mockSchedulerResource ).start();
+    }
+  }
+
+  /**
+   * Guards BISERVER-15532 R1: a failure to restart the scheduler must never replace the in-flight import failure,
+   * including when that failure is not a {@link RuntimeException}. It is attached as a suppressed exception instead.
+   */
+  @Test
+  public void testDoImport_restartFailureDoesNotMaskImportFailure() throws Exception {
+    FakeJobScheduleRequest scheduleRequest = new FakeJobScheduleRequest();
+    scheduleRequest.setInputFile( "/home/admin/test.prpt" );
+    scheduleRequest.setOutputFile( "/home/admin/test.*" );
+    scheduleRequest.setJobName( "TestJob" );
+    Error importFailure = new Error( "session expired" );
+    RuntimeException restartFailure = new RuntimeException( "scheduler cannot be restarted" );
+    when( mockSchedulerResource.getJobsList() ).thenThrow( importFailure );
+    Mockito.doThrow( restartFailure ).when( mockSchedulerResource ).start();
+
+    TestableScheduleImportUtil scheduleImportUtil =
+      new TestableScheduleImportUtil( Collections.singletonList( scheduleRequest ) );
+
+    try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
+      stubPentahoSystem( pentahoSystemMock );
+
+      try {
+        scheduleImportUtil.doImport( createImportContext( true, false ) );
+        Assert.fail( "The original import failure was expected" );
+      } catch ( Error expected ) {
+        Assert.assertSame( importFailure, expected );
+        Assert.assertEquals( 1, expected.getSuppressed().length );
+        Assert.assertSame( restartFailure, expected.getSuppressed()[ 0 ] );
+      }
+
+      verify( mockSchedulerResource ).pause();
+      verify( mockSchedulerResource ).start();
+    }
+  }
+
+  @Test
+  public void testDoImport_restartErrorDoesNotMaskImportFailure() throws Exception {
+    // The restart guard must catch Throwable for the same reason the import guard does: an Error raised while
+    // restarting the scheduler must not replace the failure that is already propagating.
+    FakeJobScheduleRequest scheduleRequest = new FakeJobScheduleRequest();
+    scheduleRequest.setInputFile( "/home/admin/test.prpt" );
+    scheduleRequest.setOutputFile( "/home/admin/test.*" );
+    scheduleRequest.setJobName( "TestJob" );
+    RuntimeException importFailure = new RuntimeException( "session expired" );
+    Error restartFailure = new Error( "scheduler cannot be restarted" );
+    when( mockSchedulerResource.getJobsList() ).thenThrow( importFailure );
+    Mockito.doThrow( restartFailure ).when( mockSchedulerResource ).start();
+
+    TestableScheduleImportUtil scheduleImportUtil =
+      new TestableScheduleImportUtil( Collections.singletonList( scheduleRequest ) );
+
+    try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
+      stubPentahoSystem( pentahoSystemMock );
+
+      try {
+        scheduleImportUtil.doImport( createImportContext( true, false ) );
+        Assert.fail( "The original import failure was expected" );
+      } catch ( RuntimeException expected ) {
+        Assert.assertSame( importFailure, expected );
+        Assert.assertEquals( 1, expected.getSuppressed().length );
+        Assert.assertSame( restartFailure, expected.getSuppressed()[ 0 ] );
+      }
+
+      verify( mockSchedulerResource ).pause();
+      verify( mockSchedulerResource ).start();
+    }
+  }
+
+  @Test
+  public void testDoImport_restartFailureLoggingFailureDoesNotMaskImportFailure() throws Exception {
+    // The import log can itself be unusable in exactly this failure sequence. Reporting the restart failure must
+    // therefore never be able to throw out of the finally block and replace the in-flight import failure.
+    FakeJobScheduleRequest scheduleRequest = new FakeJobScheduleRequest();
+    scheduleRequest.setInputFile( "/home/admin/test.prpt" );
+    scheduleRequest.setOutputFile( "/home/admin/test.*" );
+    scheduleRequest.setJobName( "TestJob" );
+    RuntimeException importFailure = new RuntimeException( "session expired" );
+    RuntimeException restartFailure = new RuntimeException( "scheduler cannot be restarted" );
+    RuntimeException loggingFailure = new RuntimeException( "restore log is closed" );
+    when( mockSchedulerResource.getJobsList() ).thenThrow( importFailure );
+    Mockito.doThrow( restartFailure ).when( mockSchedulerResource ).start();
+    Mockito.doThrow( loggingFailure ).when( mockLogger )
+      .error( ArgumentMatchers.anyString(), ArgumentMatchers.any( Throwable.class ) );
+
+    TestableScheduleImportUtil scheduleImportUtil =
+      new TestableScheduleImportUtil( Collections.singletonList( scheduleRequest ) );
+
+    try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
+      stubPentahoSystem( pentahoSystemMock );
+
+      try {
+        scheduleImportUtil.doImport( createImportContext( true, false ) );
+        Assert.fail( "The original import failure was expected" );
+      } catch ( RuntimeException expected ) {
+        Assert.assertSame( importFailure, expected );
+        Assert.assertEquals( 1, expected.getSuppressed().length );
+        Assert.assertSame( restartFailure, expected.getSuppressed()[ 0 ] );
+        // The logging failure is attached to the restart failure rather than being allowed to escape.
+        Assert.assertEquals( 1, restartFailure.getSuppressed().length );
+        Assert.assertSame( loggingFailure, restartFailure.getSuppressed()[ 0 ] );
+      }
+
+      verify( mockSchedulerResource ).pause();
+      verify( mockSchedulerResource ).start();
+    }
+  }
+
+  @Test
+  public void restartFailedMessageResolves() {
+    // Guards the cross-repository dependency: the key is defined in pentaho-platform, so an unpublished or older
+    // pentaho-platform-extensions jar would make ScheduleImportUtil log the raw key into the restore log.
+    Assert.assertNotEquals( "!" + RESTART_FAILED_KEY + "!", EXPECTED_RESTART_FAILED_MESSAGE );
+  }
+
+  @Test
+  public void testDoImport_successLoggingFailureDoesNotFailTheImport() throws Exception {
+    // Only schedulerResource.start() belongs under the restart guard. If the restart succeeds and merely reporting it
+    // fails, the import must still succeed and must not be reported as a scheduler restart failure.
+    FakeJobScheduleRequest scheduleRequest = new FakeJobScheduleRequest();
+    scheduleRequest.setInputFile( "/home/admin/test.prpt" );
+    scheduleRequest.setOutputFile( "/home/admin/test.*" );
+    scheduleRequest.setJobName( "TestJob" );
+    Mockito.doThrow( new RuntimeException( "restore log is closed" ) ).when( mockLogger )
+      .debug( ArgumentMatchers.contains( "Successfully started the scheduler" ) );
+
+    TestableScheduleImportUtil scheduleImportUtil =
+      new TestableScheduleImportUtil( Collections.singletonList( scheduleRequest ) );
+
+    try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
+      stubPentahoSystem( pentahoSystemMock );
+
+      // Must not throw: the scheduler really was restarted.
+      scheduleImportUtil.doImport( createImportContext( true, false ) );
+
+      verify( mockSchedulerResource ).pause();
+      verify( mockSchedulerResource ).start();
+      // The restart succeeded, so it must never be reported as a restart failure.
+      verify( mockLogger, never() ).error( ArgumentMatchers.eq( EXPECTED_RESTART_FAILED_MESSAGE ),
+        ArgumentMatchers.any( Throwable.class ) );
+    }
+  }
+
+  @Test
   public void testDoImport_overwriteExistingJob_removesAndReCreates() throws Exception {
     String lineageId = "lineage-123";
 
@@ -319,8 +501,9 @@ public class ScheduleImportUtilTest {
 
     TestableScheduleImportUtil scheduleImportUtil = new TestableScheduleImportUtil( scheduleList );
 
+    RuntimeException scheduleCreationFailure = new RuntimeException( "error creating schedule" );
     when( mockSchedulerResource.createJob( ArgumentMatchers.any( IJobScheduleRequest.class ) ) )
-      .thenThrow( new RuntimeException( "error creating schedule" ) );
+      .thenThrow( scheduleCreationFailure );
 
     try ( MockedStatic<PentahoSystem> pentahoSystemMock = Mockito.mockStatic( PentahoSystem.class ) ) {
       stubPentahoSystem( pentahoSystemMock );
@@ -329,7 +512,7 @@ public class ScheduleImportUtilTest {
       scheduleImportUtil.doImport( ctx );
 
       verify( mockLogger ).error( ArgumentMatchers.argThat(
-        ( String msg ) -> msg.contains( "TestJob" ) ) );
+        ( String msg ) -> msg.contains( "TestJob" ) ), ArgumentMatchers.same( scheduleCreationFailure ) );
       Assert.assertEquals( 0, ImportSession.getSession().getImportedScheduleJobIds().size() );
     }
   }
